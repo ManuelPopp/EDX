@@ -66,13 +66,167 @@ EDX <- function(wd = getwd(), Element.lines = internal, bg.fit = "custom",
   #############################################
   ##### Background calculation
   #############################################
+  background <- function(dat, method = "rollingBall", WM = bg.wm, WS = bg.ws, DEG = bg.degree, TOL = bg.tol,
+                         Min.res = 150, Span = 0.1, edit.manually = "n"){
+    cps <- as.data.frame(dat[, 2])
+    
+    if(method == "rollingBall"){
+      bl <- baseline::baseline(spectra = t(cps), wm = WM, ws = WS, method = "rollingBall")
+    }else if(method == "fillPeaks"){
+      bl <- baseline::baseline(t(cps), lambda = 1, hwi = 25, it = 50, int = round(nrow(cps)/4, 0), method = "fillPeaks")
+    }else if(method == "modpolyfit"){
+      bl <- baseline::baseline(spectra = t(cps), degree = DEG, tol = TOL, rep = 100, method = "modpolyfit")
+    }else if(method == "TAP"){
+      bl <- baseline::baseline(spectra = t(cps), interval = 600, tol = TOL, method = "TAP")
+      plot(x = dat[, 1], y = dat[, 2], type = "l")
+      lines(x = dat[, 1], y = bl@baseline, col = "red")
+      lines(x = dat[, 1], y = bl@corrected, col = "blue")
+    }else if(method == "irls"){
+      bl <- baseline::baseline(spectra = t(cps), lambda1 = 8, lambda2 = 10, maxit = 600, wi = 1.5, method = "irls")
+    }else if(method == "lowpass"){
+      bl <- baseline::baseline(spectra = as.matrix(cps), steep = 2, half = 5, method = "lowpass")
+    }else if(method == "shirley"){
+      bl <- baseline::baseline(spectra = t(cps), t = NULL, limits = NULL, maxit = 500, err = 1e-3, method = "shirley")
+    }else if(method == "medianWindow"){
+      bl <- baseline::baseline(spectra = t(cps), hwm = 800, hws = 500, method = "medianWindow")
+    }else if(method == "custom"){### custom baseline
+      smth <- dat[, 2]
+      for(i in 1:10){
+        a <- smth
+        n <- 5
+        for(i in n:(nrow(edx.data)-n)){
+          a[i] <- mean(edx.data[seq(i-n, i+n), 2])
+        }
+        smth <- a
+      }
+      #plot(x = dat[, 1], y = smooth, type = "l")
+      #abline(v = dat[mins, 1], col = "red")
+      mins <- which(smth < c(0, smth[-length(smth)]) & smth < c(smth[-1], 0))
+      minmins <- mins[-which(smth[mins] > smth[c(1, mins[-length(mins)])] &
+                               smth[mins] > smth[c(mins[-1], 1)])]
+      keep.min <- vector()
+      min.res <- Min.res
+      for(m in 1:length(mins)){
+        if(dat[mins[m], 2] < 0.9*mean(smth[mins])){
+          keep.min[m] <- "y"
+        }else if(m > min.res & m < length(mins)-min.res){
+          if(dat[mins[m], 2] < mean(smth[mins[seq(m-min.res, m+min.res)]])){
+            keep.min[m] <- "y"
+          }
+          else{
+            if(edit.manually == "y"){
+              plot(x = dat[, 1], y = dat[, 2], type = "l",
+                   xlim = c(dat[mins[m], 1]-2, dat[mins[m], 1]+2),
+                   ylim = c(0, max(dat[which(dat[, 1] > dat[mins[m], 1]-2 & dat[, 1] < dat[mins[m], 1]+2), 2])),
+                   xlab = "Energy, keV", ylab = "Intensity, cps")
+              lines(x = dat[, 1], y = smth, col = "blue")
+              abline(v = dat[mins[m], 1], col = "red")
+              keep.min[m] <- readline(paste("Keep minimum at ", dat[mins, 1], "keV for background estimation? [y/n] "))
+            }else{
+              keep.min[m] <- "n"
+            }
+          }
+        }}
+      if(edit.manually == "interval"){
+        continue <- "y"
+        while(continue == "y"){
+          lower <- as.numeric(readline("Enter lower limit (keV) of interval to exclude: "))
+          upper <- as.numeric(readline("Enter upper limit (keV) of interval to exclude: "))
+          keep.min[which(dat[mins, 1] > lower & dat[mins, 1] < upper)] <- "n"
+          minmins <- mins[which(keep.min == "y")]
+          gg <- ggplot(data = data.frame(energy = dat[, 1], cps = smth), aes(x = energy, y = cps)) +
+            geom_line() +
+            geom_point(data = data.frame(energy = dat[c(minmins), 1], cps = dat[c(minmins), 2])) +
+            geom_smooth(method = "loess", data = data.frame(energy = dat[c(minmins), 1], cps = dat[c(minmins), 2]), span = Span) +
+            scale_x_continuous(breaks = round(seq(min(dat[c(minmins), 1]), max(dat[c(minmins), 1]), by = 2), 1)) +
+            xlab("Energy, keV") +
+            ylab("Intensity, cps")
+          print(gg)
+          continue <- readline("Exclude more minima? [y/n] ")
+        }
+      }else{
+        minmins <- mins[which(keep.min == "y")]
+        gg <- ggplot(data = data.frame(energy = dat[, 1], cps = smth), aes(x = energy, y = cps)) +
+          geom_line() +
+          geom_point(data = data.frame(energy = dat[c(minmins), 1], cps = dat[c(minmins), 2])) +
+          geom_smooth(method = "loess", data = data.frame(energy = dat[c(minmins), 1], cps = dat[c(minmins), 2]), span = Span) +
+          scale_x_continuous(breaks = round(seq(min(dat[c(minmins), 1]), max(dat[c(minmins), 1]), by = 2), 1)) +
+          xlab("Energy, keV") +
+          ylab("Intensity, cps")
+        print(gg)
+      }
+      if(edit.manually %in% c("y", "interval")){
+        add.points <- readline("Add background anchoring points? [y/n] ")
+        while(!add.points %in% c("y", "n")){
+          cat("Invalid input.")
+          add.points <- readline("Add background anchoring points? [y/n] ")
+        }
+        if(add.points == "y"){
+          add.more <- "y"
+          while(add.more == "y"){
+            add.point <- readline("Enter background anchoring point position (keV): ")
+            if(suppress_warnings(is.na(as.numeric(add.point)))){
+              cat("Invalid input.")
+              add.more <- "y"
+            }else if(as.numeric(add.point) > max(dat[, 1]) | as.numeric(add.point) < min(dat[, 1])){
+              cat("Invalid input.")
+              add.more <- "y"
+            }else{
+              minmins <- c(minmins, which(abs(dat[, 1]-as.numeric(add.point)) == min(abs(dat[, 1]-as.numeric(add.point)))))
+              gg <- ggplot(data = data.frame(energy = dat[, 1], cps = smth), aes(x = energy, y = cps)) +
+                geom_line() +
+                geom_point(data = data.frame(energy = dat[c(minmins), 1], cps = dat[c(minmins), 2])) +
+                geom_smooth(method = "loess", data = data.frame(energy = dat[c(minmins), 1], cps = dat[c(minmins), 2]), span = Span) +
+                scale_x_continuous(breaks = round(seq(min(dat[c(minmins), 1]), max(dat[c(minmins), 1]), by = 2), 1)) +
+                xlab("Energy, keV") +
+                ylab("Intensity, cps")
+              print(gg)
+              add.more <- readline("Add more background anchoring points? [y/n] ")
+              while(!add.more %in% c("y", "n")){
+                cat("Invalid input.")
+                add.more <- readline("Add more background anchoring points? [y/n] ")
+              }
+            }
+          }
+        }
+      }
+      blmod <- loess(cps ~ energy, data = data.frame(energy = dat[c(minmins), 1], cps = dat[c(minmins), 2]), span = Span)
+      bl <- data.frame(x = dat[, 1], count = dat[, 2], background = predict(blmod, dat[, 1]), corrected = dat[, 2]-predict(blmod, dat[, 1]))
+      gg <- ggplot(data = data.frame(energy = dat[, 1], cps = smth), aes(x = energy, y = cps)) +
+        geom_line() +
+        geom_point(data = data.frame(energy = dat[c(minmins), 1], cps = dat[c(minmins), 2])) +
+        geom_smooth(method = "loess", data = data.frame(energy = dat[c(minmins), 1], cps = dat[c(minmins), 2]), span = Span) +
+        scale_x_continuous(breaks = round(seq(min(dat[c(minmins), 1]), max(dat[c(minmins), 1]), by = 2), 1)) +
+        xlab("Energy, keV") +
+        ylab("Intensity, cps")
+      print(gg)
+    }### end custom baseline
+    if(method == "custom"){
+      out <- list("x" = bl$x,
+                  "counts" = bl$count,
+                  "background" = bl$background,
+                  "corrected" = bl$corrected
+      )
+    }else{
+      out <- list("x" = dat[, 1],
+                  "counts" = dat[, 2],
+                  "background" = c(bl@baseline),
+                  "corrected" = dat[, 2]-c(bl@baseline)
+      )
+      plot(bl)
+      par(mfrow = c(1, 1))
+    }
+    return(out)
+  }
+  ### end of function
+  
   load <- readline("Load background? [y/n] ")
   if(!load %in% c("y", "n")){
     while(!load %in% c("y", "n")){
       load <- readline("Load background? [y/n] ")
     }
   }
-  if(load == "y"){
+  while(load == "y"){
     cat("Files in data directory:\n", paste(
       paste(seq(1, length(list.files(path = wd))), list.files(path = wd), sep = ": "),
       collapse = "\n"))
@@ -85,160 +239,31 @@ EDX <- function(wd = getwd(), Element.lines = internal, bg.fit = "custom",
     }else{
       back.cor <- readRDS(file = paste(wd, list.files(path = wd)[as.numeric(bg.file)], sep = ""))
     }
-  }else{
-    background <- function(dat, method = "rollingBall", WM = bg.wm, WS = bg.ws, DEG = bg.degree, TOL = bg.tol,
-                           Min.res = 150, Span = 0.1, edit.manually = "n"){
-      cps <- as.data.frame(dat[, 2])
-      
-      if(method == "rollingBall"){
-        bl <- baseline::baseline(spectra = t(cps), wm = WM, ws = WS, method = "rollingBall")
-      }else if(method == "fillPeaks"){
-        bl <- baseline::baseline(t(cps), lambda = 1, hwi = 25, it = 50, int = round(nrow(cps)/4, 0), method = "fillPeaks")
-      }else if(method == "modpolyfit"){
-        bl <- baseline::baseline(spectra = t(cps), degree = DEG, tol = TOL, rep = 100, method = "modpolyfit")
-      }else if(method == "TAP"){
-        bl <- baseline::baseline(spectra = t(cps), interval = 600, tol = TOL, method = "TAP")
-        plot(x = dat[, 1], y = dat[, 2], type = "l")
-        lines(x = dat[, 1], y = bl@baseline, col = "red")
-        lines(x = dat[, 1], y = bl@corrected, col = "blue")
-      }else if(method == "irls"){
-        bl <- baseline::baseline(spectra = t(cps), lambda1 = 8, lambda2 = 10, maxit = 600, wi = 1.5, method = "irls")
-      }else if(method == "lowpass"){
-        bl <- baseline::baseline(spectra = as.matrix(cps), steep = 2, half = 5, method = "lowpass")
-      }else if(method == "shirley"){
-        bl <- baseline::baseline(spectra = t(cps), t = NULL, limits = NULL, maxit = 500, err = 1e-3, method = "shirley")
-      }else if(method == "medianWindow"){
-        bl <- baseline::baseline(spectra = t(cps), hwm = 800, hws = 500, method = "medianWindow")
-      }else if(method == "custom"){### custom baseline
-        smth <- dat[, 2]
-        for(i in 1:10){
-          a <- smth
-          n <- 5
-          for(i in n:(nrow(edx.data)-n)){
-            a[i] <- mean(edx.data[seq(i-n, i+n), 2])
-          }
-          smth <- a
-        }
-        #plot(x = dat[, 1], y = smooth, type = "l")
-        #abline(v = dat[mins, 1], col = "red")
-        mins <- which(smth < c(0, smth[-length(smth)]) & smth < c(smth[-1], 0))
-        minmins <- mins[-which(smth[mins] > smth[c(1, mins[-length(mins)])] &
-                                 smth[mins] > smth[c(mins[-1], 1)])]
-        keep.min <- vector()
-        min.res <- Min.res
-        for(m in 1:length(mins)){
-          if(dat[mins[m], 2] < 0.9*mean(smth[mins])){
-            keep.min[m] <- "y"
-          }else if(m > min.res & m < length(mins)-min.res){
-            if(dat[mins[m], 2] < mean(smth[mins[seq(m-min.res, m+min.res)]])){
-              keep.min[m] <- "y"
-            }
-            else{
-              if(edit.manually == "y"){
-                plot(x = dat[, 1], y = dat[, 2], type = "l",
-                     xlim = c(dat[mins[m], 1]-2, dat[mins[m], 1]+2),
-                     ylim = c(0, max(dat[which(dat[, 1] > dat[mins[m], 1]-2 & dat[, 1] < dat[mins[m], 1]+2), 2])),
-                     xlab = "Energy, keV", ylab = "Intensity, cps")
-                lines(x = dat[, 1], y = smth, col = "blue")
-                abline(v = dat[mins[m], 1], col = "red")
-                keep.min[m] <- readline(paste("Keep minimum at ", dat[mins, 1], "keV for background estimation? [y/n] "))
-              }else{
-                keep.min[m] <- "n"
-              }
-            }
-          }}
-        if(edit.manually == "interval"){
-          continue <- "y"
-          while(continue == "y"){
-            lower <- as.numeric(readline("Enter lower limit (keV) of interval to exclude: "))
-            upper <- as.numeric(readline("Enter upper limit (keV) of interval to exclude: "))
-            keep.min[which(dat[mins, 1] > lower & dat[mins, 1] < upper)] <- "n"
-            minmins <- mins[which(keep.min == "y")]
-            gg <- ggplot(data = data.frame(energy = dat[, 1], cps = smth), aes(x = energy, y = cps)) +
-              geom_line() +
-              geom_point(data = data.frame(energy = dat[c(minmins), 1], cps = dat[c(minmins), 2])) +
-              geom_smooth(method = "loess", data = data.frame(energy = dat[c(minmins), 1], cps = dat[c(minmins), 2]), span = Span) +
-              scale_x_continuous(breaks = round(seq(min(dat[c(minmins), 1]), max(dat[c(minmins), 1]), by = 2), 1)) +
-              xlab("Energy, keV") +
-              ylab("Intensity, cps")
-            print(gg)
-            continue <- readline("Exclude more minima? [y/n] ")
-          }
-        }else{
-          minmins <- mins[which(keep.min == "y")]
-          gg <- ggplot(data = data.frame(energy = dat[, 1], cps = smth), aes(x = energy, y = cps)) +
-            geom_line() +
-            geom_point(data = data.frame(energy = dat[c(minmins), 1], cps = dat[c(minmins), 2])) +
-            geom_smooth(method = "loess", data = data.frame(energy = dat[c(minmins), 1], cps = dat[c(minmins), 2]), span = Span) +
-            scale_x_continuous(breaks = round(seq(min(dat[c(minmins), 1]), max(dat[c(minmins), 1]), by = 2), 1)) +
-            xlab("Energy, keV") +
-            ylab("Intensity, cps")
-          print(gg)
-        }
-        if(edit.manually %in% c("y", "interval")){
-          add.points <- readline("Add background anchoring points? [y/n] ")
-          while(!add.points %in% c("y", "n")){
-            cat("Invalid input.")
-            add.points <- readline("Add background anchoring points? [y/n] ")
-          }
-          if(add.points == "y"){
-            add.more <- "y"
-            while(add.more == "y"){
-              add.point <- readline("Enter background anchoring point position (keV): ")
-              if(suppress_warnings(is.na(as.numeric(add.point)))){
-                cat("Invalid input.")
-                add.more <- "y"
-              }else if(as.numeric(add.point) > max(dat[, 1]) | as.numeric(add.point) < min(dat[, 1])){
-                cat("Invalid input.")
-                add.more <- "y"
-              }else{
-                minmins <- c(minmins, which(abs(dat[, 1]-as.numeric(add.point)) == min(abs(dat[, 1]-as.numeric(add.point)))))
-                gg <- ggplot(data = data.frame(energy = dat[, 1], cps = smth), aes(x = energy, y = cps)) +
-                  geom_line() +
-                  geom_point(data = data.frame(energy = dat[c(minmins), 1], cps = dat[c(minmins), 2])) +
-                  geom_smooth(method = "loess", data = data.frame(energy = dat[c(minmins), 1], cps = dat[c(minmins), 2]), span = Span) +
-                  scale_x_continuous(breaks = round(seq(min(dat[c(minmins), 1]), max(dat[c(minmins), 1]), by = 2), 1)) +
-                  xlab("Energy, keV") +
-                  ylab("Intensity, cps")
-                print(gg)
-                add.more <- readline("Add more background anchoring points? [y/n] ")
-                while(!add.more %in% c("y", "n")){
-                  cat("Invalid input.")
-                  add.more <- readline("Add more background anchoring points? [y/n] ")
-                }
-              }
-            }
-          }
-        }
-        blmod <- loess(cps ~ energy, data = data.frame(energy = dat[c(minmins), 1], cps = dat[c(minmins), 2]), span = Span)
-        bl <- data.frame(x = dat[, 1], count = dat[, 2], background = predict(blmod, dat[, 1]), corrected = dat[, 2]-predict(blmod, dat[, 1]))
-        gg <- ggplot(data = data.frame(energy = dat[, 1], cps = smth), aes(x = energy, y = cps)) +
-          geom_line() +
-          geom_point(data = data.frame(energy = dat[c(minmins), 1], cps = dat[c(minmins), 2])) +
-          geom_smooth(method = "loess", data = data.frame(energy = dat[c(minmins), 1], cps = dat[c(minmins), 2]), span = Span) +
-          scale_x_continuous(breaks = round(seq(min(dat[c(minmins), 1]), max(dat[c(minmins), 1]), by = 2), 1)) +
-          xlab("Energy, keV") +
-          ylab("Intensity, cps")
-        print(gg)
-      }### end custom baseline
-      if(method == "custom"){
-        out <- list("x" = bl$x,
-                    "counts" = bl$count,
-                    "background" = bl$background,
-                    "corrected" = bl$corrected
-        )
-      }else{
-        out <- list("x" = dat[, 1],
-                    "counts" = dat[, 2],
-                    "background" = c(bl@baseline),
-                    "corrected" = dat[, 2]-c(bl@baseline)
-        )
-        plot(bl)
-        par(mfrow = c(1, 1))
-      }
-      return(out)
+    tmp <- data.frame(Energy = c(back.cor$x, back.cor$x, back.cor$x),
+                      Intensity = c(back.cor$counts, back.cor$background, back.cor$corrected),
+                      Line = c(rep("measured", length(back.cor$x)), rep("background", length(back.cor$x)),
+                               rep("corrected", length(back.cor$x))))
+    gg <- ggplot(dat = tmp, aes(x = Energy, y = Intensity, colour = Line)) +
+      geom_line() +
+      xlab("Energy, keV") +
+      ylab("Intensity, cps")
+    print(gg)
+    keep <- readline("Keep loaded background? [y/n]")
+    while(!keep %in% c("y", "n")){
+      cat("Invalid input.")
+      keep <- readline("Keep loaded background? [y/n]")
     }
-    edit.bg <- "y"
+    if(keep == "n"){
+      load <- readline("Load new background? [y/n] ")
+      while(!load %in% c("y", "n")){
+        cat("Invalid input.")
+        load <- readline("Load new background? [y/n]")
+      }
+    }else{
+      load <- "keep"
+    }
+  }
+  if(load == "n"){
     back.cor <- background(dat = edx.data, method = bg.fit, WM = bg.wm, WS = bg.ws,
                            DEG = bg.degree, TOL = bg.tol, Min.res = bg.min.res, Span = bg.span,
                            edit.manually = bg.edit.manually)
@@ -249,10 +274,10 @@ EDX <- function(wd = getwd(), Element.lines = internal, bg.fit = "custom",
       xlab("Energy, keV") +
       ylab("Intensity, cps")
     gly <- ggplotly(gg)
-    edit.bg <- readline("Edit background settings? [y/n]: ")
+    edit.bg <- readline("Edit background settings (overwrite current)? [y/n]: ")
     while(!edit.bg %in% c("y", "n")){
       cat("Invalid input.")
-      edit.bg <- readline("Edit background settings? [y/n]: ")
+      edit.bg <- readline("Edit background settings (overwrite current)? [y/n]: ")
     }
     while(edit.bg == "y"){
       viewer <- getOption("viewer")
@@ -271,6 +296,7 @@ EDX <- function(wd = getwd(), Element.lines = internal, bg.fit = "custom",
           bg.min.res <- as.numeric(readline(paste("Enter local min resolution (current: ", bg.min.res, "): ", sep = "")))
           bg.span <- as.numeric(readline(paste("Enter loess reg span parameter (current: ", bg.span, "): ", sep = "")))
           bg.edit.manually <- readline(paste("Edit background minima manually (current: ", bg.edit.manually, ") [y/n/interval]: ", sep = ""))
+          enable.addpoint <- TRUE
           while(!bg.edit.manually %in% c("y", "n", "interval")){
             cat("Invalid input.")
             bg.edit.manually <- readline(paste("Edit background minima manually (current: ", bg.edit.manually, ") [y/n/interval]: ", sep = ""))
@@ -286,10 +312,10 @@ EDX <- function(wd = getwd(), Element.lines = internal, bg.fit = "custom",
           xlab("Energy, keV") +
           ylab("Intensity, cps")
         gly <- ggplotly(gg)
-        edit.bg <- readline("Edit background settings? [y/n]: ")
+        edit.bg <- readline("Edit background settings (overwrite current)? [y/n]: ")
         while(!edit.bg %in% c("y", "n")){
           cat("Invalid input.")
-          edit.bg <- readline("Edit background settings? [y/n]: ")
+          edit.bg <- readline("Edit background settings (overwrite current)? [y/n]: ")
         }
       }
     }
@@ -747,7 +773,7 @@ Compton.cor <- function(wd = getwd(), edx, bg.wm = 300, bg.ws = 100){
       bl <- baseline::baseline(spectra = t(cps), degree = DEG, tol = TOL, rep = 100, method = "modpolyfit")
     }else if(method == "TAP"){
       bl <- baseline::baseline(spectra = t(cps), interval = 600, tol = TOL, method = "TAP")
-      plot(x = dat[, 1], y = dat[, 2], type = "l", xlab = "Energy, keV", ylab = "Intensity, cps")
+      plot(x = dat[, 1], y = dat[, 2], type = "l")
       lines(x = dat[, 1], y = bl@baseline, col = "red")
       lines(x = dat[, 1], y = bl@corrected, col = "blue")
     }else if(method == "irls"){
@@ -807,6 +833,7 @@ Compton.cor <- function(wd = getwd(), edx, bg.wm = 300, bg.ws = 100){
             geom_line() +
             geom_point(data = data.frame(energy = dat[c(minmins), 1], cps = dat[c(minmins), 2])) +
             geom_smooth(method = "loess", data = data.frame(energy = dat[c(minmins), 1], cps = dat[c(minmins), 2]), span = Span) +
+            scale_x_continuous(breaks = round(seq(min(dat[c(minmins), 1]), max(dat[c(minmins), 1]), by = 2), 1)) +
             xlab("Energy, keV") +
             ylab("Intensity, cps")
           print(gg)
@@ -818,12 +845,56 @@ Compton.cor <- function(wd = getwd(), edx, bg.wm = 300, bg.ws = 100){
           geom_line() +
           geom_point(data = data.frame(energy = dat[c(minmins), 1], cps = dat[c(minmins), 2])) +
           geom_smooth(method = "loess", data = data.frame(energy = dat[c(minmins), 1], cps = dat[c(minmins), 2]), span = Span) +
+          scale_x_continuous(breaks = round(seq(min(dat[c(minmins), 1]), max(dat[c(minmins), 1]), by = 2), 1)) +
           xlab("Energy, keV") +
           ylab("Intensity, cps")
         print(gg)
       }
+      if(edit.manually %in% c("y", "interval")){
+        add.points <- readline("Add background anchoring points? [y/n] ")
+        while(!add.points %in% c("y", "n")){
+          cat("Invalid input.")
+          add.points <- readline("Add background anchoring points? [y/n] ")
+        }
+        if(add.points == "y"){
+          add.more <- "y"
+          while(add.more == "y"){
+            add.point <- readline("Enter background anchoring point position (keV): ")
+            if(suppress_warnings(is.na(as.numeric(add.point)))){
+              cat("Invalid input.")
+              add.more <- "y"
+            }else if(as.numeric(add.point) > max(dat[, 1]) | as.numeric(add.point) < min(dat[, 1])){
+              cat("Invalid input.")
+              add.more <- "y"
+            }else{
+              minmins <- c(minmins, which(abs(dat[, 1]-as.numeric(add.point)) == min(abs(dat[, 1]-as.numeric(add.point)))))
+              gg <- ggplot(data = data.frame(energy = dat[, 1], cps = smth), aes(x = energy, y = cps)) +
+                geom_line() +
+                geom_point(data = data.frame(energy = dat[c(minmins), 1], cps = dat[c(minmins), 2])) +
+                geom_smooth(method = "loess", data = data.frame(energy = dat[c(minmins), 1], cps = dat[c(minmins), 2]), span = Span) +
+                scale_x_continuous(breaks = round(seq(min(dat[c(minmins), 1]), max(dat[c(minmins), 1]), by = 2), 1)) +
+                xlab("Energy, keV") +
+                ylab("Intensity, cps")
+              print(gg)
+              add.more <- readline("Add more background anchoring points? [y/n] ")
+              while(!add.more %in% c("y", "n")){
+                cat("Invalid input.")
+                add.more <- readline("Add more background anchoring points? [y/n] ")
+              }
+            }
+          }
+        }
+      }
       blmod <- loess(cps ~ energy, data = data.frame(energy = dat[c(minmins), 1], cps = dat[c(minmins), 2]), span = Span)
       bl <- data.frame(x = dat[, 1], count = dat[, 2], background = predict(blmod, dat[, 1]), corrected = dat[, 2]-predict(blmod, dat[, 1]))
+      gg <- ggplot(data = data.frame(energy = dat[, 1], cps = smth), aes(x = energy, y = cps)) +
+        geom_line() +
+        geom_point(data = data.frame(energy = dat[c(minmins), 1], cps = dat[c(minmins), 2])) +
+        geom_smooth(method = "loess", data = data.frame(energy = dat[c(minmins), 1], cps = dat[c(minmins), 2]), span = Span) +
+        scale_x_continuous(breaks = round(seq(min(dat[c(minmins), 1]), max(dat[c(minmins), 1]), by = 2), 1)) +
+        xlab("Energy, keV") +
+        ylab("Intensity, cps")
+      print(gg)
     }### end custom baseline
     if(method == "custom"){
       out <- list("x" = bl$x,
@@ -841,9 +912,52 @@ Compton.cor <- function(wd = getwd(), edx, bg.wm = 300, bg.ws = 100){
       par(mfrow = c(1, 1))
     }
     return(out)
+  }### end of function
+  
+  load <- readline("Load background? [y/n] ")
+  if(!load %in% c("y", "n")){
+    while(!load %in% c("y", "n")){
+      load <- readline("Load background? [y/n] ")
+    }
   }
-  edit.bg <- "y"
-  while(edit.bg == "y"){
+  while(load == "y"){
+    cat("Files in data directory:\n", paste(
+      paste(seq(1, length(list.files(path = wd))), list.files(path = wd), sep = ": "),
+      collapse = "\n"))
+    bg.file <- readline("Select background file: ")
+    if(suppress_warnings(is.na(as.numeric(bg.file)))){
+      if(length(grep(".rds", bg.file)) < 1){
+        bg.file <- paste(bg.file, ".rds", sep = "")
+      }
+      back.cor <- readRDS(file = paste(wd, bg.file, sep = ""))
+    }else{
+      back.cor <- readRDS(file = paste(wd, list.files(path = wd)[as.numeric(bg.file)], sep = ""))
+    }
+    tmp <- data.frame(Energy = c(back.cor$x, back.cor$x, back.cor$x),
+                      Intensity = c(back.cor$counts, back.cor$background, back.cor$corrected),
+                      Line = c(rep("measured", length(back.cor$x)), rep("background", length(back.cor$x)),
+                               rep("corrected", length(back.cor$x))))
+    gg <- ggplot(dat = tmp, aes(x = Energy, y = Intensity, colour = Line)) +
+      geom_line() +
+      xlab("Energy, keV") +
+      ylab("Intensity, cps")
+    print(gg)
+    keep <- readline("Keep loaded background? [y/n]")
+    while(!keep %in% c("y", "n")){
+      cat("Invalid input.")
+      keep <- readline("Keep loaded background? [y/n]")
+    }
+    if(keep == "n"){
+      load <- readline("Load new background? [y/n] ")
+      while(!load %in% c("y", "n")){
+        cat("Invalid input.")
+        load <- readline("Load new background? [y/n]")
+      }
+    }else{
+      load <- "keep"
+    }
+  }
+  if(load == "n"){
     back.cor <- background(dat = edx.data, method = bg.fit, WM = bg.wm, WS = bg.ws,
                            DEG = bg.degree, TOL = bg.tol, Min.res = bg.min.res, Span = bg.span,
                            edit.manually = bg.edit.manually)
@@ -854,30 +968,69 @@ Compton.cor <- function(wd = getwd(), edx, bg.wm = 300, bg.ws = 100){
       xlab("Energy, keV") +
       ylab("Intensity, cps")
     gly <- ggplotly(gg)
-    viewer <- getOption("viewer")
-    temp <- paste(tempdir(), "\\plot.html", sep = "")
-    htmlwidgets::saveWidget(gly, temp)
-    viewer(temp)
-    cat("Explore background fit in the viewer panel.\n")
-    edit.bg <- readline("Edit background settings? [y/n]: ")
-    if(edit.bg == "y"){
-      if(bg.fit == "rollingBall"){
-        bg.wm <- as.numeric(readline(paste("Enter width of local window for minimization/maximization (current: ", bg.wm, "): ", sep = "")))
-        bg.ws <- as.numeric(readline(paste("Enter width of local window for smoothing (current: ", bg.ws, "): ", sep = "")))
-      }else if(bg.fit == "modpolyfit"){
-        DEG <- as.numeric(readline(paste("Enter polynomial order (current: ", DEG, "): ", sep = "")))
-        TOL <- as.numeric(readline(paste("Enter tolerance (current: ", TOL, "): ", sep = "")))
-      }else if(bg.fit == "custom"){
-        bg.min.res <- as.numeric(readline(paste("Enter local min resolution (current: ", bg.min.res, "): ", sep = "")))
-        bg.span <- as.numeric(readline(paste("Enter loess reg span parameter (current: ", bg.span, "): ", sep = "")))
-        bg.edit.manually <- readline(paste("Edit background minima manually (current: ", bg.edit.manually, ") [y/n/interval]: ", sep = ""))
+    edit.bg <- readline("Edit background settings (overwrite current)? [y/n]: ")
+    while(!edit.bg %in% c("y", "n")){
+      cat("Invalid input.")
+      edit.bg <- readline("Edit background settings (overwrite current)? [y/n]: ")
+    }
+    while(edit.bg == "y"){
+      viewer <- getOption("viewer")
+      temp <- paste(tempdir(), "\\plot.html", sep = "")
+      htmlwidgets::saveWidget(gly, temp)
+      viewer(temp)
+      cat("Explore background fit in the viewer panel.\n")
+      if(edit.bg == "y"){
+        if(bg.fit == "rollingBall"){
+          bg.wm <- as.numeric(readline(paste("Enter width of local window for minimization/maximization (current: ", bg.wm, "): ", sep = "")))
+          bg.ws <- as.numeric(readline(paste("Enter width of local window for smoothing (current: ", bg.ws, "): ", sep = "")))
+        }else if(bg.fit == "modpolyfit"){
+          DEG <- as.numeric(readline(paste("Enter polynomial order (current: ", DEG, "): ", sep = "")))
+          TOL <- as.numeric(readline(paste("Enter tolerance (current: ", TOL, "): ", sep = "")))
+        }else if(bg.fit == "custom"){
+          bg.min.res <- as.numeric(readline(paste("Enter local min resolution (current: ", bg.min.res, "): ", sep = "")))
+          bg.span <- as.numeric(readline(paste("Enter loess reg span parameter (current: ", bg.span, "): ", sep = "")))
+          bg.edit.manually <- readline(paste("Edit background minima manually (current: ", bg.edit.manually, ") [y/n/interval]: ", sep = ""))
+          enable.addpoint <- TRUE
+          while(!bg.edit.manually %in% c("y", "n", "interval")){
+            cat("Invalid input.")
+            bg.edit.manually <- readline(paste("Edit background minima manually (current: ", bg.edit.manually, ") [y/n/interval]: ", sep = ""))
+          }
+        }
+        back.cor <- background(dat = edx.data, method = bg.fit, WM = bg.wm, WS = bg.ws,
+                               DEG = bg.degree, TOL = bg.tol, Min.res = bg.min.res, Span = bg.span,
+                               edit.manually = bg.edit.manually)
+        tmp <- data.frame(Energy = rep(back.cor$x, times = 3), value = c(back.cor$counts, back.cor$background, back.cor$corrected),
+                          line = rep(c("measured", "background", "corrected"), each = length(back.cor$x)))
+        gg <- ggplot(data = tmp, aes(x = Energy, y = value, colour = line)) +
+          geom_line() +
+          xlab("Energy, keV") +
+          ylab("Intensity, cps")
+        gly <- ggplotly(gg)
+        edit.bg <- readline("Edit background settings (overwrite current)? [y/n]: ")
+        while(!edit.bg %in% c("y", "n")){
+          cat("Invalid input.")
+          edit.bg <- readline("Edit background settings (overwrite current)? [y/n]: ")
+        }
       }
     }
+    appl.twice <- FALSE
+    if(appl.twice & bg.fit == "modpolyfit"){
+      back.cor <- background(dat = cbind(back.cor$x, back.cor$corrected), method = bg.fit)
+      back.cor <- background(dat = data.frame(energy = back.cor$x, cps = back.cor$corrected), method = "rollingBall")
+    }
   }
-  appl.twice <- FALSE
-  if(appl.twice & bg.fit == "modpolyfit"){
-    back.cor <- background(dat = cbind(back.cor$x, back.cor$corrected), method = bg.fit)
-    back.cor <- background(dat = data.frame(energy = back.cor$x, cps = back.cor$corrected), method = "rollingBall")
+  # save background
+  save <- readline("Save background? [y/n]")
+  while(!save %in% c("y", "n")){
+    cat("Invalid input.")
+    save <- readline("Save background? [y/n]")
+  }
+  if(save == "y"){
+    bg.name <- readline("Enter file name: ")
+    if(length(grep(".rds", bg.name)) < 1){
+      bg.name <- paste(bg.name, ".rds", sep = "")
+    }
+    saveRDS(back.cor, file = paste(wd, bg.name, sep = ""))
   }
   
   #############################################
