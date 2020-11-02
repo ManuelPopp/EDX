@@ -927,8 +927,10 @@ Compton.cor <- function(wd = getwd(), edx, bg.wm = 300, bg.ws = 100){
   #############################################
   if(by.area){
     edx[which(edx$PeakEngy > comptEn),]$Area <- edx[which(edx$PeakEngy > comptEn),]$Area/peak.list$peak.area[[1]]
+    edx[which(edx$PeakEngy > comptEn),]$Gfit.Area <- edx[which(edx$PeakEngy > comptEn),]$Gfit.Area/peak.list$peak.area[[1]]
   }else{
     edx[which(edx$PeakEngy > comptEn),]$Area <- edx[which(edx$PeakEngy > comptEn),]$Area/peak.list$peak.intensity[[1]]
+    edx[which(edx$PeakEngy > comptEn),]$Gfit.Area <- edx[which(edx$PeakEngy > comptEn),]$Gfit.Area/peak.list$peak.intensity[[1]]
   }
   return(edx)
 }
